@@ -1,0 +1,4 @@
+logs/
+*.log
+active-tasks.json
+.DS_Store
