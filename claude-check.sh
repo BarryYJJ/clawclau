@@ -1,28 +1,41 @@
 #!/bin/bash
-# claude-check.sh — 检查所有Claude Code任务状态
-# 用法: claude-check.sh [task-id]
+# claude-check.sh — Check status of Claude Code tasks
+# Usage: claude-check.sh [task-id]
 
 set -euo pipefail
 
-TASK_REGISTRY="$HOME/.openclaw/workspace/.clawdbot/active-tasks.json"
+CLAWCLAU_HOME="${CLAWCLAU_HOME:-$HOME/.openclaw/workspace/.clawdbot}"
+TASK_REGISTRY="$CLAWCLAU_HOME/active-tasks.json"
+
+# --- Dependency check ---
+command -v tmux >/dev/null 2>&1 || { echo "ERROR: 'tmux' is required but not installed."; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo "ERROR: 'jq' is required but not installed."; exit 1; }
+
+if [ ! -f "$TASK_REGISTRY" ]; then
+    echo "ERROR: Task registry not found at '$TASK_REGISTRY'. Run claude-spawn.sh first."
+    exit 1
+fi
 
 if [ $# -gt 0 ]; then
-    # 检查单个任务
+    # Check single task
     TASK_ID="$1"
     TMUX_SESSION="claude-${TASK_ID}"
-    
+
+    # Read status from registry
+    STATUS=$(jq -r --arg id "$TASK_ID" '.[] | select(.id == $id) | .status // "unknown"' "$TASK_REGISTRY")
+
+    if [ "$STATUS" = "unknown" ]; then
+        echo "ERROR: Task '$TASK_ID' not found in registry"
+        exit 1
+    fi
+
     if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
         STATUS="running"
-        # 获取最后10行输出
         LAST_LINES=$(tmux capture-pane -t "$TMUX_SESSION" -p | tail -10)
-    else
-        STATUS="done"
-        LAST_LINES=""
     fi
-    
-    # 从registry获取任务信息
-    INFO=$(jq -r --arg id "$TASK_ID" '.[] | select(.id == $id) // empty' "$TASK_REGISTRY")
-    
+
+    INFO=$(jq -r --arg id "$TASK_ID" '.[] | select(.id == $id)' "$TASK_REGISTRY")
+
     echo "=== Task: $TASK_ID ==="
     echo "Status: $STATUS"
     if [ -n "$INFO" ]; then
@@ -33,12 +46,11 @@ if [ $# -gt 0 ]; then
         echo "$LAST_LINES"
     fi
 else
-    # 检查所有任务
-    echo "=== Active Claude Code Tasks ==="
-    
-    # 列出registry中的所有任务
+    # List all tasks
+    echo "=== Claude Code Tasks ==="
+
     jq -r '.[] | "- \(.id) [\(.status)] tmux:\(.tmuxSession) started:\(.startedAt)"' "$TASK_REGISTRY" 2>/dev/null || echo "(no tasks)"
-    
+
     echo ""
     echo "=== Live tmux sessions ==="
     tmux list-sessions 2>/dev/null | grep "^claude-" | while read line; do

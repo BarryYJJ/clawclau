@@ -1,34 +1,56 @@
 #!/bin/bash
-# claude-spawn.sh — 在tmux中启动Claude Code任务
-# 用法: claude-spawn.sh <task-id> "<prompt>" [workdir] [timeout-seconds]
-#
-# 小八调用乌萨奇的新方式：tmux + claude -p，绕过ACP
-# 完成后自动关闭tmux session，monitor脚本检测到后更新注册表并通知小八
+# claude-spawn.sh — Spawn a Claude Code task in a tmux session
+# Usage: claude-spawn.sh <task-id> "<prompt>" [workdir] [timeout-seconds]
 
 set -euo pipefail
 
+# --- Dependency check ---
+for cmd in tmux jq; do
+    command -v "$cmd" >/dev/null 2>&1 || { echo "ERROR: '$cmd' is required but not installed."; exit 1; }
+done
+
+# --- Configurable paths ---
+CLAWCLAU_HOME="${CLAWCLAU_HOME:-$HOME/.openclaw/workspace/.clawdbot}"
+TASK_REGISTRY="$CLAWCLAU_HOME/active-tasks.json"
+LOG_DIR="$CLAWCLAU_HOME/logs"
+CLAWCLAU_SHELL="${CLAWCLAU_SHELL:-bash}"
+
+# --- Argument validation ---
+if [ $# -lt 2 ]; then
+    echo "Usage: claude-spawn.sh <task-id> \"<prompt>\" [workdir] [timeout-seconds]"
+    exit 1
+fi
+
 TASK_ID="$1"
 PROMPT="$2"
-WORKDIR="${3:-$HOME/.openclaw/workspace}"
-TIMEOUT="${4:-600}"  # 默认10分钟超时
+WORKDIR="${3:-$(pwd)}"
+TIMEOUT="${4:-600}"
+
+# --- Input sanitization (task-id: alphanumeric, dash, underscore only) ---
+if ! echo "$TASK_ID" | grep -qE '^[a-zA-Z0-9_-]+$'; then
+    echo "ERROR: task-id must be alphanumeric (a-z, A-Z, 0-9, -, _). Got: '$TASK_ID'"
+    exit 1
+fi
+
 TMUX_SESSION="claude-${TASK_ID}"
-TASK_REGISTRY="$HOME/.openclaw/workspace/.clawdbot/active-tasks.json"
-LOG_DIR="$HOME/.openclaw/workspace/.clawdbot/logs"
 
+# --- Init directories and registry ---
 mkdir -p "$LOG_DIR"
+[ -f "$TASK_REGISTRY" ] || echo '[]' > "$TASK_REGISTRY"
 
-# 检查是否已有同名session
+# --- Check for existing session ---
 if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
     echo "ERROR: tmux session '$TMUX_SESSION' already exists"
     exit 1
 fi
 
-# 创建tmux session，运行claude命令后自动退出session
-# 用login shell (-l) 确保PATH和env vars正确加载
+# --- Launch Claude Code in tmux ---
+# Uses login shell to ensure PATH and env vars are loaded.
+# --dangerously-skip-permissions bypasses interactive approval — see SECURITY.md.
 tmux new-session -d -s "$TMUX_SESSION" -c "$WORKDIR" \
-    "exec zsh -l -c 'claude -p --dangerously-skip-permissions \"${PROMPT}\" > \"${LOG_DIR}/${TASK_ID}.log\" 2>&1; exit'"
+    "exec $CLAWCLAU_SHELL -l -c 'claude -p --dangerously-skip-permissions \"\${PROMPT}\"' > \"${LOG_DIR}/${TASK_ID}.log\" 2>&1; exit'"
 
-# 注册任务
+# --- Register task ---
 TIMESTAMP=$(date +%s000)
 jq --arg id "$TASK_ID" \
    --arg session "$TMUX_SESSION" \

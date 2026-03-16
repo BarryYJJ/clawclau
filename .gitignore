@@ -1,4 +1,6 @@
 logs/
 *.log
 active-tasks.json
+*.tmp
 .DS_Store
+.env
