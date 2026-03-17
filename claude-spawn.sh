@@ -44,11 +44,27 @@ if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
     exit 1
 fi
 
+# --- Write prompt to temp file and generate wrapper script ---
+# This avoids the nightmare of nesting quotes through tmux → shell → claude.
+PROMPT_FILE="$CLAWCLAU_HOME/prompts/${TASK_ID}.txt"
+WRAPPER_FILE="$CLAWCLAU_HOME/prompts/${TASK_ID}.sh"
+TASK_LOG_FILE="$LOG_DIR/${TASK_ID}.log"
+mkdir -p "$CLAWCLAU_HOME/prompts" "$LOG_DIR"
+printf '%s' "$PROMPT" > "$PROMPT_FILE"
+
+# The wrapper reads the prompt, runs claude, and redirects output — all self-contained.
+cat > "$WRAPPER_FILE" << WRAPPER_EOF
+#!/bin/bash
+cd "\$2"
+exec claude -p --dangerously-skip-permissions "\$(cat "\$1")" > "\$3" 2>&1
+WRAPPER_EOF
+chmod +x "$WRAPPER_FILE"
+
 # --- Launch Claude Code in tmux ---
 # Uses login shell to ensure PATH and env vars are loaded.
 # --dangerously-skip-permissions bypasses interactive approval — see SECURITY.md.
 tmux new-session -d -s "$TMUX_SESSION" -c "$WORKDIR" \
-    "exec $CLAWCLAU_SHELL -l -c 'claude -p --dangerously-skip-permissions \"\${PROMPT}\"' > \"${LOG_DIR}/${TASK_ID}.log\" 2>&1; exit"
+    "$CLAWCLAU_SHELL -l $WRAPPER_FILE $PROMPT_FILE $WORKDIR $TASK_LOG_FILE"
 
 # Verify the session actually started
 sleep 1
