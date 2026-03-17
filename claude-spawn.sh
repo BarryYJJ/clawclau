@@ -92,8 +92,34 @@ jq --arg id "$TASK_ID" \
    '. += [{"id": $id, "tmuxSession": $session, "prompt": $prompt, "workdir": $workdir, "log": $log, "startedAt": ($ts|tonumber), "status": "running", "timeout": ($timeout|tonumber)}]' \
    "$TASK_REGISTRY" > "$TASK_REGISTRY.tmp" && mv "$TASK_REGISTRY.tmp" "$TASK_REGISTRY"
 
+# --- Background monitor: auto-notify when task finishes ---
+(
+    while tmux has-session -t "$TMUX_SESSION" 2>/dev/null; do
+        sleep 10
+    done
+    # Session ended — wait for log flush
+    sleep 2
+    NOW_TS=$(date +%s000)
+    if [ -s "$TASK_LOG_FILE" ]; then
+        STATUS="done"
+        EVENT_TEXT="Done: 任务 $TASK_ID 已完成"
+    else
+        STATUS="failed"
+        EVENT_TEXT="Failed: 任务 $TASK_ID 失败（空日志）"
+    fi
+    # Update registry
+    jq --arg id "$TASK_ID" --arg ts "$NOW_TS" --arg status "$STATUS" \
+        '(.[] | select(.id == $id)) |= . + {status: $status, completedAt: ($ts | tonumber)}' \
+        "$TASK_REGISTRY" > "$TASK_REGISTRY.tmp" && mv "$TASK_REGISTRY.tmp" "$TASK_REGISTRY"
+    # Notify via openclaw
+    command -v openclaw >/dev/null 2>&1 && \
+        openclaw system event --text "$EVENT_TEXT" --mode now
+) &
+disown
+
 echo "OK: spawned '$TASK_ID' in tmux session '$TMUX_SESSION'"
 echo "  Prompt: $PROMPT"
 echo "  Workdir: $WORKDIR"
 echo "  Log: $LOG_DIR/${TASK_ID}.log"
 echo "  Timeout: ${TIMEOUT}s"
+echo "  Monitor: background (auto-notify on completion)"
