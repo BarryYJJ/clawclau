@@ -52,11 +52,12 @@ TASK_LOG_FILE="$LOG_DIR/${TASK_ID}.log"
 mkdir -p "$CLAWCLAU_HOME/prompts" "$LOG_DIR"
 printf '%s' "$PROMPT" > "$PROMPT_FILE"
 
-# The wrapper reads the prompt, runs claude, and redirects output — all self-contained.
+# The wrapper just runs claude — no output redirection needed.
+# Output capture is handled by tmux pipe-pane (see below).
 cat > "$WRAPPER_FILE" << WRAPPER_EOF
 #!/bin/bash
 cd "\$2"
-exec claude -p --dangerously-skip-permissions "\$(cat "\$1")" > "\$3" 2>&1
+exec claude -p --dangerously-skip-permissions "\$(cat "\$1")"
 WRAPPER_EOF
 chmod +x "$WRAPPER_FILE"
 
@@ -65,6 +66,13 @@ chmod +x "$WRAPPER_FILE"
 # --dangerously-skip-permissions bypasses interactive approval — see SECURITY.md.
 tmux new-session -d -s "$TMUX_SESSION" -c "$WORKDIR" \
     "$CLAWCLAU_SHELL -l $WRAPPER_FILE $PROMPT_FILE $WORKDIR $TASK_LOG_FILE"
+
+# --- Capture terminal output via tmux pipe-pane ---
+# This is the most reliable way to log claude output:
+# - Works regardless of whether claude detects a TTY or not
+# - Captures everything that appears in the terminal, including ANSI codes
+# - Flushes in real-time (not buffered like shell redirection)
+tmux pipe-pane -t "$TMUX_SESSION" "cat >> \"$TASK_LOG_FILE\""
 
 # Verify the session actually started
 sleep 1
@@ -94,6 +102,8 @@ jq --arg id "$TASK_ID" \
 
 # --- Background monitor: auto-notify when task finishes ---
 (
+    # Source profile so openclaw is in PATH
+    export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.openclaw/bin:$PATH"
     while tmux has-session -t "$TMUX_SESSION" 2>/dev/null; do
         sleep 10
     done
@@ -112,8 +122,7 @@ jq --arg id "$TASK_ID" \
         '(.[] | select(.id == $id)) |= . + {status: $status, completedAt: ($ts | tonumber)}' \
         "$TASK_REGISTRY" > "$TASK_REGISTRY.tmp" && mv "$TASK_REGISTRY.tmp" "$TASK_REGISTRY"
     # Notify via openclaw
-    command -v openclaw >/dev/null 2>&1 && \
-        openclaw system event --text "$EVENT_TEXT" --mode now
+    openclaw system event --text "$EVENT_TEXT" --mode now 2>/dev/null || true
 ) &
 disown
 

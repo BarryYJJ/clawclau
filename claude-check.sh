@@ -30,9 +30,16 @@ if [ $# -gt 0 ]; then
     fi
 
     LAST_LINES=""
+    LOG_PREVIEW=""
     if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
         STATUS="running"
         LAST_LINES=$(tmux capture-pane -t "$TMUX_SESSION" -p 2>/dev/null | tail -10 || true)
+    else
+        # Session done — show last lines from log file (strip ANSI)
+        LOG_FILE=$(jq -r --arg id "$TASK_ID" '.[] | select(.id == $id) | .log // ""' "$TASK_REGISTRY")
+        if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ] && [ -s "$LOG_FILE" ]; then
+            LOG_PREVIEW=$(sed 's/\x1b\[[0-9;]*[a-zA-Z]//g; s/\x0f//g; s/\x07//g' "$LOG_FILE" | strings | grep -v '^\[' | grep -v '^]' | grep -v '^$' | tail -10 || true)
+        fi
     fi
 
     INFO=$(jq -r --arg id "$TASK_ID" '.[] | select(.id == $id)' "$TASK_REGISTRY")
@@ -43,8 +50,11 @@ if [ $# -gt 0 ]; then
         echo "$INFO" | jq -r '"Prompt: \(.prompt)\nWorkdir: \(.workdir)\nStarted: \(.startedAt)"'
     fi
     if [ "$STATUS" = "running" ]; then
-        echo "--- Last output ---"
+        echo "--- Last output (tmux) ---"
         echo "$LAST_LINES"
+    elif [ -n "$LOG_PREVIEW" ]; then
+        echo "--- Last output (log) ---"
+        echo "$LOG_PREVIEW"
     fi
 else
     # List all tasks
