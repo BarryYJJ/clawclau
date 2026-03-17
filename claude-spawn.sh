@@ -48,7 +48,21 @@ fi
 # Uses login shell to ensure PATH and env vars are loaded.
 # --dangerously-skip-permissions bypasses interactive approval — see SECURITY.md.
 tmux new-session -d -s "$TMUX_SESSION" -c "$WORKDIR" \
-    "exec $CLAWCLAU_SHELL -l -c 'claude -p --dangerously-skip-permissions \"\${PROMPT}\"' > \"${LOG_DIR}/${TASK_ID}.log\" 2>&1; exit'"
+    "exec $CLAWCLAU_SHELL -l -c 'claude -p --dangerously-skip-permissions \"\${PROMPT}\"' > \"${LOG_DIR}/${TASK_ID}.log\" 2>&1; exit"
+
+# Verify the session actually started
+sleep 1
+if ! tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+    # Session died immediately — check if log was created for diagnostics
+    if [ -f "$LOG_DIR/${TASK_ID}.log" ] && [ -s "$LOG_DIR/${TASK_ID}.log" ]; then
+        echo "ERROR: tmux session '$TMUX_SESSION' started but exited immediately."
+        echo "  Last log output:"
+        tail -5 "$LOG_DIR/${TASK_ID}.log"
+    else
+        echo "ERROR: tmux session '$TMUX_SESSION' failed to start (no TTY or claude not found)."
+    fi
+    exit 1
+fi
 
 # --- Register task ---
 TIMESTAMP=$(date +%s000)

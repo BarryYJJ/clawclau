@@ -29,9 +29,10 @@ if [ $# -gt 0 ]; then
         exit 1
     fi
 
+    LAST_LINES=""
     if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
         STATUS="running"
-        LAST_LINES=$(tmux capture-pane -t "$TMUX_SESSION" -p | tail -10)
+        LAST_LINES=$(tmux capture-pane -t "$TMUX_SESSION" -p 2>/dev/null | tail -10 || true)
     fi
 
     INFO=$(jq -r --arg id "$TASK_ID" '.[] | select(.id == $id)' "$TASK_REGISTRY")
