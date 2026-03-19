@@ -1,155 +1,331 @@
-# clawclau
+# ClawClau v2
 
-Async Claude Code task dispatcher via **tmux**. Bypass ACP protocol blocking for [OpenClaw](https://github.com/openclaw/openclaw) and other AI agents.
+**Task dispatcher for Claude Code via tmux**
 
-## Why?
+ClawClau 是一套基于 tmux 的异步 Claude Code 任务调度工具集，专为 OpenClaw 小八等 AI Agent 设计。支持在不阻塞主进程的情况下派发、监控、纠偏和获取 Claude Code 任务结果。
 
-When using OpenClaw (or any AI agent) to orchestrate [Claude Code](https://docs.anthropic.com/en/docs/claude-code) tasks, the ACP (Agent Communication Protocol) can deadlock — the agent waits for Claude Code, and Claude Code waits for user confirmation. Neither moves.
+---
 
-**clawclau** sidesteps this entirely by running Claude Code in isolated tmux sessions. The orchestrator spawns tasks asynchronously, checks results via log files, and gets notified when work is done. No synchronous handshake, no deadlock.
+## 安装
 
-Inspired by [Elvis Sun's Agent Swarm architecture](https://x.com/elvissun/status/2025920521871716562).
+### 前置依赖
 
-## Features
-
-- **Async task dispatch** — spawn Claude Code tasks without blocking
-- **Mid-task steering** — send messages to running sessions via `tmux send-keys`
-- **Automatic monitoring** — cron-based watchdog detects completion, timeout, and failure
-- **Task registry** — JSON-based state tracking for all tasks
-- **Configurable paths** — `CLAWCLAU_HOME` and `CLAWCLAU_SHELL` environment variables
-- **Minimal dependencies** — just `bash`, `tmux`, and `jq`
-
-## Prerequisites
-
-| Tool | Install |
-|------|---------|
-| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | `npm install -g @anthropic-ai/claude-code` |
-| [tmux](https://github.com/tmux/tmux) | `brew install tmux` (macOS) / `apt install tmux` (Linux) |
-| [jq](https://stedolan.github.io/jq/) | `brew install jq` (macOS) / `apt install jq` (Linux) |
-
-Claude Code must be authenticated and configured (API key or OAuth).
-
-## Quick Start
+- [tmux](https://github.com/tmux/tmux) >= 3.0
+- [jq](https://stedolan.github.io/jq/) >= 1.6
+- [claude](https://github.com/anthropics/claude-code) (Claude Code CLI)
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/BarryYJJ/clawclau.git
-cd clawclau
-
-# 2. Set up the working directory
-export CLAWCLAU_HOME="$HOME/.clawclau"
-mkdir -p "$CLAWCLAU_HOME/logs"
-echo '[]' > "$CLAWCLAU_HOME/active-tasks.json"
-
-# 3. (Optional) Add to your shell profile
-echo 'export CLAWCLAU_HOME="$HOME/.clawclau"' >> ~/.zshrc
-source ~/.zshrc
-
-# 4. Dispatch a task
-./claude-spawn.sh my-task "Refactor the auth module to use JWT" ~/my-project 300
-
-# 5. Check status
-./claude-check.sh my-task
-
-# 6. Get results
-./claude-result.sh my-task
+# macOS
+brew install tmux jq
+npm install -g @anthropic-ai/claude-code
 ```
 
-## How It Works
-
-```mermaid
-flowchart TB
-    Agent["AI Agent<br/>(e.g. OpenClaw)"] -->|"1. spawn"| Spawn["claude-spawn.sh"]
-    Spawn -->|"create tmux session"| Tmux["tmux + Claude Code<br/>(background)"]
-    Spawn -->|"register"| Registry["active-tasks.json"]
-
-    Monitor["claude-monitor.sh<br/>(cron every 2min)"] -->|"detect done/timeout"| Registry
-    Monitor -->|"notify"| Agent
-
-    Tmux -->|"output"| Logs["logs/<task-id>.log"]
-
-    Agent -->|"2. check"| Check["claude-check.sh"]
-    Check --> Registry
-    Agent -->|"3. steer"| Steer["claude-steer.sh"]
-    Steer --> Tmux
-    Agent -->|"4. result"| Result["claude-result.sh"]
-    Result --> Logs
-    Agent -->|"5. kill"| Kill["claude-kill.sh"]
-    Kill --> Tmux
-
-    style Agent fill:#ff6b6b,color:#fff
-    style Tmux fill:#4ecdc4,color:#fff
-    style Registry fill:#ffe66d,color:#333
-```
-
-## Script Reference
-
-| Script | Usage | Description |
-|--------|-------|-------------|
-| `claude-spawn.sh` | `./claude-spawn.sh <id> "<prompt>" [workdir] [timeout]` | Spawn a new task |
-| `claude-steer.sh` | `./claude-steer.sh <id> "<message>"` | Send message to running task |
-| `claude-check.sh` | `./claude-check.sh [id]` | Check task status (all or single) |
-| `claude-kill.sh` | `./claude-kill.sh <id>` | Terminate a running task |
-| `claude-result.sh` | `./claude-result.sh <id>` | Read full task output |
-| `claude-monitor.sh` | `./claude-monitor.sh` | Auto-detect completed/timeout tasks |
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CLAWCLAU_HOME` | `~/.openclaw/workspace/.clawdbot` | Base directory for registry and logs |
-| `CLAWCLAU_SHELL` | `bash` | Shell used to launch Claude Code in tmux |
-
-## Monitoring
-
-For automatic task detection, add `claude-monitor.sh` to cron:
+### 安装 ClawClau
 
 ```bash
-# Edit crontab
-crontab -e
-
-# Add this line (run every 2 minutes):
-*/2 * * * * /path/to/clawclau/claude-monitor.sh
+git clone https://github.com/BarryYJJ/clawclau.git ~/.openclaw/workspace/clawclau
+# 或将 scripts/ 目录添加到 PATH
+export PATH="$HOME/.openclaw/workspace/clawclau/scripts:$PATH"
 ```
 
-The monitor will:
-- Detect completed tasks (tmux session ended + log file has content)
-- Kill tasks that exceed their timeout
-- Notify via `openclaw system event` (if `openclaw` CLI is installed, otherwise silently skip)
+初始化数据目录（首次运行时脚本自动创建，也可手动初始化）：
 
-## Task Lifecycle
-
-```
-running → done     (tmux ended, log has content)
-running → failed   (tmux ended, log empty/missing)
-running → timeout  (exceeded timeout limit)
-running → killed   (manually terminated)
+```bash
+mkdir -p ~/.clawclau/{logs,prompts}
+echo '[]' > ~/.clawclau/active-tasks.json
 ```
 
-All state is tracked in `active-tasks.json`.
+---
 
-## Security
+## 使用方法
 
-**`--dangerously-skip-permissions`** is used in `claude-spawn.sh` to bypass Claude Code's interactive permission prompts. This is necessary for non-interactive automation, but it means:
+所有脚本均位于 `scripts/` 目录，下文以 `$SCRIPTS` 代指该路径。
 
-- Claude Code can execute any shell command without approval
-- Claude Code can read/write any file it has access to
-- Only use this in trusted, sandboxed environments
+```bash
+SCRIPTS=~/.openclaw/workspace/clawclau/scripts
+```
 
-If you need permission checks, modify `claude-spawn.sh` to remove the flag and handle Claude Code's interactive prompts manually.
+### spawn — 派发任务
 
-## Troubleshooting
+```bash
+$SCRIPTS/claude-spawn.sh [OPTIONS] <task-id> "<prompt>" [workdir]
+```
 
-| Problem | Solution |
-|---------|----------|
-| `command not found: tmux` | Install tmux: `brew install tmux` or `apt install tmux` |
-| `command not found: claude` | tmux shell can't find Claude Code. Ensure `CLAWCLAU_SHELL` is set to your login shell (e.g., `zsh` or `bash`) |
-| Task spawned but no output | Claude Code may take 20-30 seconds to start (API proxy latency). This is normal. |
-| tmux session stays open after task completes | This shouldn't happen with the `; exit` at the end of the command. Check your shell config. |
-| Prompt with quotes breaks spawn | Escape inner quotes or use a file: `./claude-spawn.sh task "$(cat prompt.txt)"` |
-| macOS: `timeout` command not found | This project doesn't use `timeout`. If you need it: `brew install coreutils` |
-| Registry file missing | `claude-spawn.sh` auto-creates it. If other scripts complain, run: `echo '[]' > "$CLAWCLAU_HOME/active-tasks.json"` |
+**选项：**
 
-## License
+| 选项 | 默认值 | 说明 |
+|------|--------|------|
+| `--steerable` | false | 交互式模式，支持 `claude-steer.sh` 中途纠偏 |
+| `--timeout <sec>` | 600 | 超时秒数 |
+| `--interval <sec>` | 0 | 进度汇报间隔（0 = 关闭） |
+| `--max-retries <n>` | 3 | 最大重试次数记录 |
+| `--model <name>` | — | 指定 Claude 模型（如 `claude-opus-4-6`） |
+| `--parent <id>` | — | 父任务 ID（重试时使用） |
 
-[MIT](LICENSE)
+**示例：**
+
+```bash
+# 基础任务（print 模式，stream-json 日志）
+$SCRIPTS/claude-spawn.sh kb-update "请将以下文章整理入知识库..." ~/workspace
+
+# 带进度汇报，每 60s 通知一次
+$SCRIPTS/claude-spawn.sh research "调研 AI Agent 框架趋势" ~/workspace \
+  --interval 60 --timeout 1200
+
+# 交互式模式（可中途发消息纠偏）
+$SCRIPTS/claude-spawn.sh explore "探索代码库，找出主要问题" ~/myproject \
+  --steerable --interval 120
+
+# 指定模型
+$SCRIPTS/claude-spawn.sh heavy "复杂分析任务..." ~/workspace \
+  --model claude-opus-4-6 --timeout 1800
+
+# 重试（改进 prompt 后重新派发）
+$SCRIPTS/claude-spawn.sh kb-update-retry-1 "改进后的 prompt..." ~/workspace \
+  --parent kb-update --retry-count 1
+```
+
+任务派发后，后台自动启动完成检测器。任务结束时通过 `openclaw system event` 通知小八，无需手动轮询。
+
+---
+
+### check — 查询状态
+
+```bash
+$SCRIPTS/claude-check.sh              # 列出所有任务（表格）
+$SCRIPTS/claude-check.sh <task-id>   # 单任务详情 + 结果预览
+```
+
+**确定性检查**：以 tmux session 是否存活为 running 的最终判据，不调用 AI，不消耗 token。
+
+```
+══ ClawClau 任务列表 (3 条) ═══════════════
+ID                       状态         重试     超时    开始时间
+──────────────────────────────────────────────────────
+kb-update                done         0/3      600s    03-19 09:00
+research                 running      0/3      1200s   03-19 09:15
+explore                  killed       0/3      600s    03-18 22:00
+
+汇总: 1 运行中, 1 已完成, 0 失败/超时
+```
+
+---
+
+### result — 获取结果
+
+```bash
+$SCRIPTS/claude-result.sh <task-id>        # 提取可读文本（推荐）
+$SCRIPTS/claude-result.sh <task-id> --raw  # 输出原始 stream-json 日志
+```
+
+- 任务还在运行时，实时抓取 tmux 屏幕输出
+- Print 模式自动解析 stream-json，优先级：`result` > `assistant message` > `text_delta`
+
+---
+
+### kill — 终止任务
+
+```bash
+$SCRIPTS/claude-kill.sh <task-id>
+```
+
+终止对应的 tmux session 并将注册表状态更新为 `killed`。
+
+---
+
+### steer — 中途纠偏
+
+```bash
+$SCRIPTS/claude-steer.sh <task-id> "请聚焦在 X 方面，忽略 Y"
+```
+
+通过 `tmux send-keys` 向交互式 Claude 发送消息。**仅支持 `--steerable` 模式**；print 模式（`claude -p`）非交互，无法 steer，建议 kill 后以改进 prompt 重新派发。
+
+每次 steer 消息自动记录到注册表的 `steerLog` 数组，可通过 `claude-check.sh <id>` 查看历史。
+
+---
+
+### monitor — 批量监控（cron）
+
+```bash
+$SCRIPTS/claude-monitor.sh
+```
+
+作为 spawn 内嵌后台 completion detector 的**安全兜底**：
+
+- 检查所有 `running` 任务的 tmux session 是否存活
+- session 结束后更新状态（done/failed）并通知小八
+- 检查超时，超时后终止 session
+
+**推荐设置 cron，每 10 分钟运行一次：**
+
+```bash
+# crontab -e
+*/10 * * * * /path/to/clawclau/scripts/claude-monitor.sh >> /tmp/clawclau-monitor.log 2>&1
+```
+
+---
+
+### morning-brief — 每日早报
+
+```bash
+$SCRIPTS/morning-brief.sh
+```
+
+生成包含美股/A股/港股指数、核心标的涨跌和 AI 要闻的每日早报。依赖 `python3`，可选安装 `yfinance` 获取更稳定的美股数据。
+
+---
+
+## 架构说明
+
+```
+scripts/
+├── clawclau-lib.sh        # 共享库（所有脚本 source 此文件）
+├── claude-spawn.sh        # 派发任务
+├── claude-check.sh        # 查询状态（确定性，不耗 token）
+├── claude-result.sh       # 获取结果
+├── claude-kill.sh         # 终止任务
+├── claude-steer.sh        # 中途纠偏
+├── claude-monitor.sh      # 批量监控（cron 用）
+└── morning-brief.sh       # 每日早报生成器
+
+skills/
+└── clawclau/
+    └── SKILL.md           # OpenClaw skill 描述文件（小八调用指南）
+
+tests/
+├── test_helper.bash       # 测试共享辅助函数（tmux/openclaw mock）
+├── test_clawclau-lib.bats
+├── test_claude-spawn.bats
+├── test_claude-check.bats
+├── test_claude-result.bats
+├── test_claude-kill.bats
+├── test_claude-steer.bats
+└── test_claude-monitor.bats
+```
+
+### clawclau-lib.sh — 共享库
+
+所有脚本通过 `source clawclau-lib.sh` 引入共享功能：
+
+| 函数 | 说明 |
+|------|------|
+| `cc_init` | 初始化目录结构和注册表 |
+| `cc_require <cmd>...` | 检查依赖命令是否安装 |
+| `cc_task_get <id> <field>` | 读取注册表字段 |
+| `cc_task_exists <id>` | 检查任务是否存在 |
+| `cc_task_register <json>` | 追加新任务到注册表 |
+| `cc_task_update <id> <patch>` | 更新注册表字段 |
+| `cc_task_steer_log <id> <msg>` | 追加 steer 记录 |
+| `cc_tmux_session <id>` | 生成 tmux session 名（`cc-<id>`） |
+| `cc_extract_text <log> [max]` | 从 stream-json 或纯文本日志提取摘要 |
+| `cc_notify <text>` | 发送通知（飞书群或 openclaw event） |
+| `cc_now_ms` | 当前毫秒时间戳 |
+| `cc_elapsed_human <start_ms>` | 人类可读经过时长 |
+| `cc_validate_task_id <id>` | 验证任务 ID 格式 |
+
+### 两种运行模式
+
+| 模式 | 命令 | 日志格式 | 支持 steer | 适用场景 |
+|------|------|----------|-----------|---------|
+| **Print**（默认）| `claude -p --output-format stream-json` | `.json` | 否 | 任务明确，一次完成 |
+| **Steerable** | `claude --dangerously-skip-permissions` | `.txt` | 是 | 探索性任务，需中途纠正 |
+
+### 任务状态流转
+
+```
+running
+  → done        (session 结束，日志非空)
+  → failed      (session 结束，日志为空)
+  → timeout     (超过 --timeout 秒)
+  → killed      (手动 claude-kill.sh)
+```
+
+---
+
+## 配置说明
+
+### 数据目录：`~/.clawclau/`
+
+```
+~/.clawclau/
+├── active-tasks.json      # 任务注册表（source of truth）
+├── config                 # 可选配置文件
+├── logs/
+│   ├── <task-id>.json     # stream-json 日志（print 模式）
+│   └── <task-id>.txt      # 纯文本日志（steerable 模式）
+└── prompts/
+    ├── <task-id>.txt      # prompt 备份
+    └── <task-id>-wrapper.sh  # 自动生成的 wrapper 脚本
+```
+
+### 配置文件：`~/.clawclau/config`
+
+```ini
+# 飞书通知目标（群 ID 或机器人 webhook）
+# 留空则使用 openclaw system event 通知
+notify_chat = your-feishu-chat-id
+```
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `CC_HOME` | `~/.clawclau` | 数据目录（注册表、日志、prompts）|
+| `CC_NOTIFY_CHAT` | — | 飞书通知目标（覆盖 config 文件） |
+
+**示例：**
+
+```bash
+# 临时覆盖数据目录（用于测试）
+CC_HOME=/tmp/test-clawclau $SCRIPTS/claude-spawn.sh test "hello" .
+
+# 指定飞书通知目标
+CC_NOTIFY_CHAT=my-feishu-group $SCRIPTS/claude-spawn.sh my-task "..." .
+```
+
+---
+
+## 运行测试
+
+测试使用 [bats-core](https://github.com/bats-core/bats-core)：
+
+```bash
+brew install bats-core
+bats tests/
+```
+
+---
+
+## 注册表字段说明（active-tasks.json）
+
+```json
+{
+  "id":           "任务唯一 ID",
+  "mode":         "print | steerable",
+  "tmuxSession":  "cc-{id}",
+  "prompt":       "完整 prompt",
+  "workdir":      "工作目录",
+  "log":          "日志文件路径",
+  "model":        "模型名称（空=默认）",
+  "startedAt":    1234567890000,
+  "timeout":      600,
+  "interval":     0,
+  "status":       "running | done | failed | timeout | killed",
+  "completedAt":  null,
+  "maxRetries":   3,
+  "retryCount":   0,
+  "parentTaskId": null,
+  "steerLog":     []
+}
+```
+
+---
+
+## 设计原则
+
+1. **确定性监控**：tmux 存活 + 日志文件检查，不靠 AI 轮询，零 token 消耗
+2. **隔离执行**：每个任务独立 tmux session（`cc-<id>`），互不干扰
+3. **内嵌完成检测**：spawn 时启动后台双重 fork 进程，session 结束即通知
+4. **stream-json 日志**：实时写入，可提取中间进度和最终结果
+5. **小八主导重试**：失败通知小八，由小八决策 prompt 如何改进后重新派发
