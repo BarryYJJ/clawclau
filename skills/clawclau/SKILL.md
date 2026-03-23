@@ -3,7 +3,7 @@ name: clawclau
 description: 异步 Claude Code 任务调度工具集（ClawClau）。基于 tmux 派发后台 Claude Code 任务，含进度汇报、完成通知、状态查询、中途纠偏。触发场景：让乌萨奇做xxx、派发任务给Claude Code、查看后台任务状态、终止后台任务、batch任务派发。
 ---
 
-# ClawClau v2.0.0 — Claude Code 任务调度系统
+# ClawClau v2.1.0 — Claude Code 任务调度系统
 
 小八（OpenClaw）派发异步 Claude Code 任务的工具集。基于 Elvis Sun 的 Agent Swarm 架构设计。
 

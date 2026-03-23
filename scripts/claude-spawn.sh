@@ -253,7 +253,6 @@ launch_monitors() {
             _LAST_BYTES=$_CURRENT_BYTES
 
             _SNIPPET=$(cc_extract_text "$_LOG" 200)
-            [[ -z "$_SNIPPET" ]] && continue
 
             _NOW_MS=$(date +%s000)
             _ELAPSED=$(( (_NOW_MS - _START_MS) / 1000 ))
@@ -263,8 +262,17 @@ launch_monitors() {
                 _TIME_STR="$((_ELAPSED / 60))分钟"
             fi
 
-            _MSG="[进度] 任务 $_TASK_ID（已运行 $_TIME_STR）"
-            _MSG+=$'\n'"${_SNIPPET}"
+            # 格式化日志大小
+            if [[ $_CURRENT_BYTES -ge 1048576 ]]; then
+                _SIZE_STR="$(($_CURRENT_BYTES / 1048576))MB"
+            elif [[ $_CURRENT_BYTES -ge 1024 ]]; then
+                _SIZE_STR="$(($_CURRENT_BYTES / 1024))KB"
+            else
+                _SIZE_STR="${_CURRENT_BYTES}B"
+            fi
+
+            _MSG="[进度] 任务 $_TASK_ID（已运行 $_TIME_STR，日志 ${_SIZE_STR}）"
+            [[ -n "$_SNIPPET" ]] && _MSG+=$'\n'"${_SNIPPET}"
             cc_notify "$_MSG"
         done
     ) &
